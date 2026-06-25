@@ -1,0 +1,29 @@
+# 数据库文件（本地数据，不上传）
+tasks.db
+tasks.db-wal
+tasks.db-shm
+
+# 日志
+bot.log
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# 环境变量（含密钥）
+.env
+*.env
+
+# ngrok
+ngrok
+
+# Hermes 计划文件
+.hermes/

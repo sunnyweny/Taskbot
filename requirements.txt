@@ -1,0 +1,1 @@
+wecom-bot-svr>=0.3.4
