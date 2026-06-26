@@ -112,10 +112,10 @@ def update_task(task_id, **kwargs):
         return False
 
     conn = get_connection()
-    conn.execute(f"UPDATE tasks SET {', '.join(set_parts)} WHERE id = ?",
-                 values + [task_id])
+    cur = conn.execute(f"UPDATE tasks SET {', '.join(set_parts)} WHERE id = ?",
+                       values + [task_id])
     conn.commit()
-    changed = conn.total_changes
+    changed = cur.rowcount
     conn.close()
     return changed > 0
 
@@ -123,9 +123,9 @@ def update_task(task_id, **kwargs):
 def delete_task(task_id):
     """删除任务"""
     conn = get_connection()
-    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     conn.commit()
-    affected = conn.total_changes
+    affected = cur.rowcount
     conn.close()
     return affected > 0
 

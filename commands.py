@@ -129,6 +129,7 @@ def parse_add_task(raw: str) -> dict:
         "project_name": "",
         "task_detail": "",
         "responsible": "",
+        "start_date": "",
         "deadline": "",
         "priority": "P2中",
     }
