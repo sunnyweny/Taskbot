@@ -1,7 +1,5 @@
-"""主服务入口 — 企微机器人消息处理 + webhook 主动推送"""
+"""主服务入口 — 企微机器人消息处理 + 智能机器人 API 推送"""
 
-import json
-import urllib.request
 from datetime import datetime
 from wecom_bot_svr import WecomBotServer, RspTextMsg
 from wecom_bot_svr.req_msg import ReqMsg
@@ -10,64 +8,23 @@ from db import init_db, add_task as db_add, update_task as db_update
 from db import delete_task as db_delete, get_task as db_get, query_tasks, get_stats
 from db import inspect_tasks, daily_report, weekly_report
 from commands import parse_command, parse_add_task, normalize_field
-from config import TOKEN, AES_KEY, CORP_ID, BOT_KEY, HOST, PORT, BOT_PATH, BOT_NAME
+from config import TOKEN, AES_KEY, CORP_ID, HOST, BOT_PORT, BOT_PATH, BOT_NAME
+from wecom_api import send_markdown as api_send_markdown, send_text as api_send_text
+from ai_scheduler import compute_all_suggestions, format_suggestions_markdown
 
 
 # ═══════════════════════════════════════════
-#  Webhook 主动推送 Markdown（解决被动回复只能 text 的限制）
+#  API 推送（通过智能机器人 botID+BotSecret）
 # ═══════════════════════════════════════════
-
-WEBHOOK_URL = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={BOT_KEY}"
-
 
 def send_markdown(content: str):
-    """通过 webhook 主动推送 markdown 消息到群"""
-    if not BOT_KEY:
-        print("[WARN] BOT_KEY 未配置，跳过 markdown 推送")
-        return False
-    payload = json.dumps({
-        "msgtype": "markdown",
-        "markdown": {"content": content}
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        WEBHOOK_URL,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            result = json.loads(resp.read())
-            if result.get("errcode") != 0:
-                print(f"[WARN] Webhook 推送失败: {result}")
-                return False
-            return True
-    except Exception as e:
-        print(f"[ERROR] Webhook 推送异常: {e}")
-        return False
+    """通过智能机器人 API 推送 markdown 到群"""
+    return api_send_markdown(content)
 
 
 def send_text(content: str):
-    """通过 webhook 主动推送纯文本消息到群"""
-    if not BOT_KEY:
-        return False
-    payload = json.dumps({
-        "msgtype": "text",
-        "text": {"content": content}
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        WEBHOOK_URL,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            result = json.loads(resp.read())
-            return result.get("errcode") == 0
-    except Exception as e:
-        print(f"[ERROR] Webhook 推送异常: {e}")
-        return False
+    """通过智能机器人 API 推送文本到群"""
+    return api_send_text(content)
 
 
 # ═══════════════════════════════════════════
@@ -326,6 +283,7 @@ HELP_TEXT = """🤖 任务看板助手
 
 🤖 AI 调度
   巡检 — 延期/到期/阻塞/高优未启动 + 调度建议
+  建议 — AI 调度建议(负载均衡/延期预警/阻塞升级)
   日报 — 今日完成/新增/风险/明日计划
   周报 — 本周概览/按项目/阻塞/下周重点
   统计 — 统计摘要
@@ -364,12 +322,12 @@ def msg_handler(req_msg: ReqMsg, server: WecomBotServer):
                 title = f"📋 {params['responsible']} 的任务"
             if params.get("include_done"):
                 title += " (全部)"
-            # 被动回复纯文本摘要，webhook 推送 markdown 看板
+            # 被动回复纯文本摘要，API 推送 markdown 看板
             text_reply = render_kanban_text(tasks, title)
             send_markdown(render_kanban(tasks, title))
             return RspTextMsg(content=text_reply)
 
-        # ── 操作类（单条文本回复 + webhook 推看板）──
+        # ── 操作类（单条文本回复 + API 推看板）──
 
         elif action == "add":
             info = parse_add_task(params["raw"])
@@ -450,7 +408,7 @@ def msg_handler(req_msg: ReqMsg, server: WecomBotServer):
                 return RspTextMsg(content=f"✅ 已为 #{tid} 添加备注")
             return RspTextMsg(content=f"❌ 未找到任务 #{tid}")
 
-        # ── AI 调度类（webhook 推送长报告）──
+        # ── AI 调度类（API 推送长报告）──
 
         elif action == "stats":
             report = render_stats(get_stats())
@@ -475,6 +433,12 @@ def msg_handler(req_msg: ReqMsg, server: WecomBotServer):
         elif action == "help":
             return RspTextMsg(content=HELP_TEXT)
 
+        elif action == "suggest":
+            suggestions = compute_all_suggestions()
+            report = format_suggestions_markdown(suggestions)
+            send_text(report)
+            return RspTextMsg(content="🤖 AI 调度建议已推送到群")
+
         else:
             return RspTextMsg(content=(
                 f"🤔 未识别的命令。发送 帮助 查看可用命令。\n"
@@ -493,20 +457,17 @@ def msg_handler(req_msg: ReqMsg, server: WecomBotServer):
 def main():
     init_db()
     server = WecomBotServer(
-        BOT_NAME,
-        HOST,
-        PORT,
-        path=BOT_PATH,
+            BOT_NAME,
+            HOST,
+            BOT_PORT,
+            path=BOT_PATH,
         token=TOKEN,
         aes_key=AES_KEY,
         corp_id=CORP_ID,
-        bot_key=BOT_KEY,
     )
     server.set_message_handler(msg_handler)
     server.set_event_handler(lambda req_msg, srv: RspTextMsg(content=""))
-    print(f"🚀 任务看板机器人启动: http://{HOST}:{PORT}{BOT_PATH}")
-    if not BOT_KEY:
-        print("⚠️  WX_BOT_KEY 未配置，Markdown 看板推送将不可用")
+    print(f"🚀 任务看板机器人启动: http://{HOST}:{BOT_PORT}{BOT_PATH}")
     server.run()
 
 

@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>产品部动态任务看板 · 智能调度系统</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif; background: #f5f7fa; color: #1e293b; }
+.card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; transition: all 0.2s; }
+.card:hover { border-color: #c7d2fe; box-shadow: 0 2px 12px rgba(99,102,241,0.08); }
+.kanban-col { min-width: 230px; max-width: 320px; flex: 1; }
+.task-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; transition: all 0.15s; }
+.task-card:hover { border-color: #a5b4fc; box-shadow: 0 1px 8px rgba(99,102,241,0.10); }
+.prio-P0 { border-left: 3px solid #dc2626; }
+.prio-P1 { border-left: 3px solid #ea580c; }
+.prio-P2 { border-left: 3px solid #f59e0b; }
+.prio-P3 { border-left: 3px solid #16a34a; }
+.load-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.load-name { width: 90px; font-size: 12px; color: #475569; flex-shrink: 0; }
+.load-track { flex: 1; height: 18px; background: #f1f5f9; border-radius: 9px; overflow: hidden; }
+.load-fill { height: 100%; border-radius: 9px; }
+.load-pct { width: 36px; font-size: 11px; font-weight: 600; text-align: right; }
+.tab-btn { padding: 6px 16px; border-radius: 8px; font-size: 14px; font-weight: 500; color: #64748b; cursor: pointer; transition: all 0.2s; }
+.tab-btn:hover { background: #f1f5f9; color: #334155; }
+.tab-btn.active { background: #eef2ff; color: #4f46e5; }
+.hidden-tab { display: none !important; }
+.tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; }
+.tag-red { background: #fef2f2; color: #dc2626; }
+.tag-orange { background: #fff7ed; color: #ea580c; }
+.tag-yellow { background: #fefce8; color: #ca8a04; }
+.tag-green { background: #f0fdf4; color: #16a34a; }
+.toast { position: fixed; bottom: 20px; right: 20px; z-index: 100; background: #1e293b; color: #fff; border-radius: 8px; padding: 10px 18px; font-size: 13px; max-width: 360px; animation: slideUp 0.3s ease; }
+@keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+#modal { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 200; display: flex; align-items: center; justify-content: center; }
+#modal.hidden { display: none; }
+#modal-content { background: #fff; border-radius: 12px; padding: 24px; max-width: 480px; width: 90%; max-height: 80vh; overflow-y: auto; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- Header -->
+<header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <h1 class="text-lg font-bold text-gray-800">📋 产品部动态任务看板</h1>
+    <span class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">v2.0</span>
+  </div>
+  <div class="flex items-center gap-2">
+    <span class="text-xs text-gray-400" id="last-update">--</span>
+    <button onclick="refreshAll()" class="text-xs bg-indigo-50 text-indigo-600 px-3 py-1 rounded hover:bg-indigo-100">🔄 刷新</button>
+  </div>
+</header>
+
+<!-- Tabs -->
+<nav class="bg-white border-b border-gray-200 px-6 py-2 flex gap-2">
+  <button class="tab-btn active" onclick="switchTab('kanban')">📋 看板</button>
+  <button class="tab-btn" onclick="switchTab('weekly')">📊 周报</button>
+  <button class="tab-btn" onclick="switchTab('schedule')">🤖 AI调度</button>
+  <button class="tab-btn" onclick="switchTab('members')">👥 团队</button>
+</nav>
+
+<!-- Kanban Tab -->
+<div id="tab-kanban" class="px-4 py-4">
+  <div class="flex gap-3 overflow-x-auto pb-2">
+    {% set status_headers = {'待开始': '📥 待开始', '进行中': '🔄 进行中', '已完成': '✅ 已完成', '阻塞延期': '🚫 阻塞'} %}
+    {% for status, label in status_headers.items() %}
+    <div class="kanban-col">
+      <div class="flex items-center justify-between mb-2 px-1">
+        <span class="text-sm font-semibold text-gray-600">{{ label }}</span>
+        <span class="text-xs text-gray-400">{{ kanban.get(status, [])|length }}</span>
+      </div>
+      <div class="task-list space-y-1.5">
+        {% for t in kanban.get(status, []) %}
+        <div class="task-card prio-{{ t.priority[:2] }}" onclick="openTask({{ t.id }})">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-xs text-gray-400">#{{ t.id }}</span>
+            <span class="tag {% if t.priority == 'P0紧急' %}tag-red{% elif t.priority == 'P1高' %}tag-orange{% elif t.priority == 'P2中' %}tag-yellow{% else %}tag-green{% endif %}">{{ t.priority }}</span>
+          </div>
+          <div class="text-sm font-medium text-gray-800 truncate">{{ t.task_detail[:30] }}</div>
+          <div class="flex items-center justify-between mt-1.5">
+            <span class="text-xs text-gray-400">@{{ t.responsible or '-' }}</span>
+            <span class="text-xs text-gray-300">{{ t.deadline or '-' }}</span>
+          </div>
+          {% if t.project_name %}
+          <div class="text-xs text-indigo-500 mt-0.5">{{ t.project_name }}</div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="text-xs text-gray-300 mt-2 text-center">点击任务卡片查看详情 | 共 {{ total_tasks }} 条</div>
+</div>
+
+<!-- Weekly Tab -->
+<div id="tab-weekly" class="hidden-tab px-6 py-4">
+  <h2 class="text-lg font-semibold mb-4">📊 产品部周报 {{ weekly.week_label }}</h2>
+  <div class="grid grid-cols-4 gap-4 mb-4">
+    <div class="card p-4"><div class="text-xs text-gray-400">本周完成</div><div class="text-2xl font-bold text-green-600">{{ weekly.completed_this_week|length }}</div></div>
+    <div class="card p-4"><div class="text-xs text-gray-400">进行中</div><div class="text-2xl font-bold text-orange-600">{{ weekly.active_tasks|length }}</div></div>
+    <div class="card p-4"><div class="text-xs text-gray-400">项目数</div><div class="text-2xl font-bold text-indigo-600">{{ weekly.projects|length }}</div></div>
+    <div class="card p-4"><div class="text-xs text-gray-400">阻塞</div><div class="text-2xl font-bold text-red-600">{{ weekly.blocked|length }}</div></div>
+  </div>
+  <div class="card p-4 mb-4">
+    <h3 class="text-sm font-semibold mb-2">按项目</h3>
+    <div class="grid grid-cols-3 gap-2">
+      {% for pn, s in weekly.projects.items() %}
+      <div class="text-xs border rounded p-2">
+        <span class="font-medium">{{ pn }}</span>:
+        <span class="text-green-600">{{ s.get('进行中',0) }}</span> /
+        <span class="text-yellow-600">{{ s.get('待开始',0) }}</span> /
+        <span class="text-red-600">{{ s.get('阻塞延期',0) }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% if weekly.blocked %}
+  <div class="card p-4 mb-4 border-l-4 border-l-red-400">
+    <h3 class="text-sm font-semibold text-red-600 mb-2">🚫 阻塞项 ({{ weekly.blocked|length }})</h3>
+    {% for t in weekly.blocked %}
+    <div class="text-xs py-1">#{{ t.id }} {{ t.task_detail[:40] }} @{{ t.responsible }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<!-- Schedule Tab -->
+<div id="tab-schedule" class="hidden-tab px-6 py-4">
+  <h2 class="text-lg font-semibold mb-4">🤖 AI 智能调度</h2>
+  <div class="card p-4 mb-4">
+    <h3 class="text-sm font-semibold mb-2">👥 团队负载</h3>
+    {% for m in members %}
+    {% set colors = {'red':'#ef4444','orange':'#f97316','amber':'#d97706','green':'#16a34a','blue':'#4f46e5','purple':'#7c3aed'} %}
+    {% set color = colors.get(m.avatar_color, '#64748b') %}
+    {% set bar_color = '#dc2626' if m.load_pct >= 80 else ('#ea580c' if m.load_pct >= 60 else ('#f59e0b' if m.load_pct >= 40 else '#16a34a')) %}
+    <div class="load-row">
+      <span class="load-name">{{ m.name }}<span class="text-gray-300">({{ m.role }})</span></span>
+      <div class="load-track"><div class="load-fill" style="width:{{ m.load_pct }}%;background:linear-gradient(90deg,{{ color }},{{ bar_color }});"></div></div>
+      <span class="load-pct" style="color:{{ bar_color }}">{{ m.load_pct }}%</span>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="card p-4 mb-4">
+    <h3 class="text-sm font-semibold mb-2">🧠 调度建议</h3>
+    <div id="ai-suggestions"><span class="text-xs text-gray-400">加载中...</span></div>
+  </div>
+  <div class="card p-4">
+    <h3 class="text-sm font-semibold mb-2">⚠️ 风险扫描</h3>
+    <div id="risk-panel"><span class="text-xs text-gray-400">加载中...</span></div>
+  </div>
+</div>
+
+<!-- Members Tab -->
+<div id="tab-members" class="hidden-tab px-6 py-4">
+  <h2 class="text-lg font-semibold mb-4">👥 团队成员</h2>
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+    {% for m in members %}
+    <div class="card p-4">
+      <div class="flex items-center gap-3 mb-2">
+        <div class="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm" style="background:linear-gradient(135deg,{% if m.avatar_color == 'red' %}#ef4444,#dc2626{% elif m.avatar_color == 'orange' %}#f97316,#ea580c{% elif m.avatar_color == 'amber' %}#d97706,#b45309{% elif m.avatar_color == 'green' %}#22c55e,#16a34a{% elif m.avatar_color == 'sky' %}#06b6d4,#0891b2{% elif m.avatar_color == 'purple' %}#8b5cf6,#7c3aed{% elif m.avatar_color == 'cyan' %}#06b6d4,#0e7490{% else %}#6366f1,#4f46e5{% endif %})">{{ m.name[:1] }}</div>
+        <div>
+          <div class="font-semibold text-sm">{{ m.name }}</div>
+          <div class="text-xs text-gray-400">{{ m.role }}</div>
+        </div>
+      </div>
+      <div class="flex gap-2 text-xs">
+        <span class="tag tag-green">活跃: {{ m.total_active }}</span>
+        {% if m.blocked_count > 0 %}<span class="tag tag-red">阻塞: {{ m.blocked_count }}</span>{% endif %}
+      </div>
+      {% if m.products %}
+      <div class="mt-2 flex flex-wrap gap-1">
+        {% for p in m.products[:6] %}
+        <span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{{ p }}</span>
+        {% endfor %}
+        {% if m.products|length > 6 %}<span class="text-xs text-gray-400">+{{ m.products|length - 6 }}</span>{% endif %}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Task Detail Modal -->
+<div id="modal" class="hidden">
+  <div id="modal-content">
+    <div class="flex justify-between items-center mb-3">
+      <h3 class="font-semibold" id="modal-title">任务详情</h3>
+      <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+    </div>
+    <div id="modal-body"></div>
+    <div class="flex gap-2 mt-4" id="modal-actions"></div>
+  </div>
+</div>
+
+<script>
+const API = '/api';
+
+async function fetchJSON(url) {
+  const r = await fetch(url);
+  return r.json();
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[onclick="switchTab('${name}')"]`).classList.add('active');
+  document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('hidden-tab'));
+  document.getElementById(`tab-${name}`).classList.remove('hidden-tab');
+}
+
+async function openTask(id) {
+  const r = await fetchJSON(`${API}/tasks/${id}`);
+  if (!r.ok) return;
+  const t = r.data;
+  document.getElementById('modal-title').textContent = `#${t.id} ${t.task_detail}`;
+  document.getElementById('modal-body').innerHTML = `
+    <div class="text-sm space-y-2">
+      <div><span class="text-gray-400">项目:</span> <strong>${t.project_name || '-'}</strong></div>
+      <div><span class="text-gray-400">责任人:</span> ${t.responsible || '-'}</div>
+      <div><span class="text-gray-400">状态:</span> <span class="tag ${t.status==='已完成'?'tag-green':t.status==='阻塞延期'?'tag-red':'tag-yellow'}">${t.status}</span></div>
+      <div><span class="text-gray-400">优先级:</span> <span class="tag ${t.priority==='P0紧急'?'tag-red':t.priority==='P1高'?'tag-orange':'tag-yellow'}">${t.priority}</span></div>
+      <div><span class="text-gray-400">开始:</span> ${t.start_date || '-'}</div>
+      <div><span class="text-gray-400">截止:</span> ${t.deadline || '-'}</div>
+      <div><span class="text-gray-400">备注:</span> ${t.notes || '-'}</div>
+      <div><span class="text-gray-400">更新:</span> ${t.updated_at || '-'}</div>
+    </div>
+  `;
+  document.getElementById('modal-actions').innerHTML = `
+    <button onclick="updateTask(${t.id},'status','${t.status !== '已完成' ? '已完成' : '待开始'}')" class="text-xs bg-green-50 text-green-600 px-3 py-1 rounded hover:bg-green-100">${t.status !== '已完成' ? '✅ 完成' : '↩️ 重开'}</button>
+    <button onclick="updateTask(${t.id},'status','阻塞延期')" class="text-xs bg-red-50 text-red-600 px-3 py-1 rounded hover:bg-red-100">🚫 阻塞</button>
+    <button onclick="deleteTask(${t.id})" class="text-xs bg-gray-50 text-gray-500 px-3 py-1 rounded hover:bg-gray-100">🗑️ 删除</button>
+  `;
+  document.getElementById('modal').classList.remove('hidden');
+}
+
+function closeModal() { document.getElementById('modal').classList.add('hidden'); }
+
+async function updateTask(id, field, value) {
+  const r = await fetch(`${API}/tasks/${id}`, {
+    method: 'PUT', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({[field]: value})
+  });
+  const d = await r.json();
+  if (d.ok) { showToast(`✅ #${id} ${field} → ${value}`); closeModal(); refreshAll(); }
+  else showToast(`❌ 更新失败`);
+}
+
+async function deleteTask(id) {
+  if (!confirm(`确认删除 #${id}？`)) return;
+  const r = await fetch(`${API}/tasks/${id}`, {method: 'DELETE'});
+  const d = await r.json();
+  if (d.ok) { showToast(`🗑️ 已删除 #${id}`); closeModal(); refreshAll(); }
+  else showToast(`❌ 删除失败`);
+}
+
+async function refreshAll() {
+  const r = await fetchJSON(`${API}/kanban`);
+  if (r.ok) {
+    // Re-render kanban columns
+    for (const [status, tasks] of Object.entries(r.data || {})) {
+      const col = document.querySelector(`[data-status="${status}"]`);
+      if (!col) continue;
+      col.innerHTML = tasks.map(t => `
+        <div class="task-card prio-${(t.priority||'').substring(0,2)}" onclick="openTask(${t.id})">
+          <div class="flex justify-between mb-1"><span class="text-xs text-gray-400">#${t.id}</span><span class="tag ${t.priority==='P0紧急'?'tag-red':t.priority==='P1高'?'tag-orange':'tag-yellow'}">${t.priority}</span></div>
+          <div class="text-sm font-medium truncate">${(t.task_detail||'').substring(0,30)}</div>
+          <div class="flex justify-between mt-1.5"><span class="text-xs text-gray-400">@${t.responsible||'-'}</span><span class="text-xs text-gray-300">${t.deadline||'-'}</span></div>
+          ${t.project_name ? `<div class="text-xs text-indigo-500 mt-0.5">${t.project_name}</div>` : ''}
+        </div>
+      `).join('');
+    }
+  }
+  // Load AI suggestions
+  fetchJSON(`${API}/reports/inspect`).then(r => {
+    if (!r.ok) return;
+    const d = r.data;
+    let html = '';
+    if (d.overdue?.length) html += `<div class="text-xs text-red-600 mb-1">🔴 延期: ${d.overdue.length} 条</div>`;
+    if (d.due_today?.length) html += `<div class="text-xs text-orange-600 mb-1">🟡 今日到期: ${d.due_today.length} 条</div>`;
+    if (d.high_prio_idle?.length) html += `<div class="text-xs text-red-600 mb-1">🔴 P0/P1未启动: ${d.high_prio_idle.length} 条</div>`;
+    if (d.blocked?.length) html += `<div class="text-xs text-orange-600 mb-1">🚫 阻塞: ${d.blocked.length} 条</div>`;
+    if (d.suggestions?.length) {
+      html += '<div class="mt-2 space-y-1">';
+      d.suggestions.forEach(s => { html += `<div class="text-xs py-0.5">• ${s}</div>`; });
+      html += '</div>';
+    }
+    if (!html) html = '<span class="text-xs text-green-600">✅ 无风险项</span>';
+    document.getElementById('risk-panel').innerHTML = html;
+  });
+  // Load suggestions
+  fetchJSON(`${API}/stats/risks`).then(r => {
+    const d = r.data;
+    let html = '';
+    if (d.total_risk === 0) html = '<span class="text-xs text-green-600">✅ 无调度建议</span>';
+    else html = `<div class="text-xs text-gray-500">共 ${d.total_risk} 项风险: 延期${d.overdue.length} | 高优未启动${d.high_prio_idle.length} | 阻塞超3天${d.blocked_stale.length}</div>`;
+    document.getElementById('ai-suggestions').innerHTML = html;
+  });
+  document.getElementById('last-update').textContent = new Date().toLocaleTimeString('zh-CN');
+}
+
+function showToast(msg) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2500);
+}
+
+// Init
+document.addEventListener('DOMContentLoaded', () => {
+  // Add data-status attributes to kanban columns
+  const cols = document.querySelectorAll('.kanban-col');
+  const statuses = ['待开始', '进行中', '已完成', '阻塞延期'];
+  cols.forEach((col, i) => { if (i < statuses.length) col.setAttribute('data-status', statuses[i]); });
+  document.getElementById('last-update').textContent = new Date().toLocaleTimeString('zh-CN');
+});
+</script>
+</body>
+</html>

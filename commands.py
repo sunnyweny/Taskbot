@@ -19,6 +19,7 @@ PATTERNS = {
     "daily": re.compile(r"^(日报|daily|今日报告)"),
     "weekly": re.compile(r"^(周报|weekly|本周报告)"),
     "help": re.compile(r"^(帮助|help|h|\?|？)"),
+    "suggest": re.compile(r"^(建议|智能建议|ai|调度建议|suggest|ai建议)"),
 }
 
 
@@ -114,6 +115,11 @@ def parse_command(text: str, user_name: str = "") -> dict:
     m = PATTERNS["help"].match(text)
     if m:
         return {"action": "help", "params": {}}
+
+    # AI 建议
+    m = PATTERNS["suggest"].match(text)
+    if m:
+        return {"action": "suggest", "params": {}}
 
     return {"action": "unknown", "params": {}}
 

@@ -345,3 +345,148 @@ def weekly_report():
         "high_prio_active": high_prio_active,
         "projects": projects,
     }
+
+
+# ─── Web 后台扩展查询 ───
+
+def get_member_workload():
+    """团队成员负载分析：按责任人统计活跃任务数 + 优先级加权负载"""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT responsible,
+               COUNT(*) as total_active,
+               SUM(CASE WHEN priority = 'P0紧急' THEN 4
+                        WHEN priority = 'P1高' THEN 3
+                        WHEN priority = 'P2中' THEN 2
+                        WHEN priority = 'P3低' THEN 1 ELSE 1 END) as weighted_load,
+               SUM(CASE WHEN status = '阻塞延期' THEN 1 ELSE 0 END) as blocked_count,
+               SUM(CASE WHEN status = '进行中' THEN 1 ELSE 0 END) as in_progress_count,
+               SUM(CASE WHEN status = '待开始' THEN 1 ELSE 0 END) as pending_count,
+               MIN(CASE WHEN deadline != '' THEN deadline END) as nearest_deadline
+        FROM tasks
+        WHERE status IN ('待开始', '进行中', '阻塞延期')
+        GROUP BY responsible
+        ORDER BY weighted_load DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_kanban_data(project=None, responsible=None):
+    """按状态分组返回看板数据，供 Web 5列看板使用"""
+    conn = get_connection()
+    conditions = ["status IN ('待开始', '进行中', '已完成', '阻塞延期')"]
+    params = []
+    if project:
+        conditions.append("project_name LIKE ?")
+        params.append(f"%{project}%")
+    if responsible:
+        conditions.append("responsible LIKE ?")
+        params.append(f"%{responsible}%")
+    where = "WHERE " + " AND ".join(conditions)
+
+    rows = conn.execute(f"""
+        SELECT * FROM tasks {where}
+        ORDER BY
+            CASE priority WHEN 'P0紧急' THEN 1 WHEN 'P1高' THEN 2 WHEN 'P2中' THEN 3 WHEN 'P3低' THEN 4 END,
+            deadline ASC, id DESC
+    """, params).fetchall()
+    conn.close()
+
+    grouped = {"待开始": [], "进行中": [], "已完成": [], "阻塞延期": []}
+    for r in rows:
+        d = dict(r)
+        status = d["status"]
+        if status in grouped:
+            grouped[status].append(d)
+    return grouped
+
+
+def get_due_tasks(days=7, include_done=False):
+    """获取未来 N 天内到期的任务"""
+    from datetime import datetime, timedelta
+    today = datetime.now().strftime("%Y-%m-%d")
+    end = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
+    conn = get_connection()
+    conditions = ["deadline != ''", "deadline >= ?", "deadline <= ?"]
+    params = [today, end]
+    if not include_done:
+        conditions.append("status != '已完成'")
+    rows = conn.execute(f"""
+        SELECT * FROM tasks
+        WHERE {' AND '.join(conditions)}
+        ORDER BY deadline ASC,
+            CASE priority WHEN 'P0紧急' THEN 1 WHEN 'P1高' THEN 2 WHEN 'P2中' THEN 3 WHEN 'P3低' THEN 4 END
+    """, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_risk_tasks():
+    """风险任务扫描：延期 + 高优未启动 + 阻塞超3天"""
+    from datetime import datetime, timedelta
+    today = datetime.now().strftime("%Y-%m-%d")
+    three_days_ago = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+
+    conn = get_connection()
+
+    overdue = [dict(r) for r in conn.execute(
+        "SELECT * FROM tasks WHERE deadline != '' AND deadline < ? AND status != '已完成' "
+        "ORDER BY deadline ASC", (today,)
+    ).fetchall()]
+
+    high_prio_idle = [dict(r) for r in conn.execute(
+        "SELECT * FROM tasks WHERE priority IN ('P0紧急','P1高') AND status = '待开始' "
+        "ORDER BY CASE priority WHEN 'P0紧急' THEN 1 WHEN 'P1高' THEN 2 END, deadline"
+    ).fetchall()]
+
+    blocked_stale = [dict(r) for r in conn.execute(
+        "SELECT * FROM tasks WHERE status = '阻塞延期' AND updated_at < ? "
+        "ORDER BY updated_at ASC", (three_days_ago,)
+    ).fetchall()]
+
+    conn.close()
+    return {
+        "overdue": overdue,
+        "high_prio_idle": high_prio_idle,
+        "blocked_stale": blocked_stale,
+        "total_risk": len(overdue) + len(high_prio_idle) + len(blocked_stale),
+    }
+
+
+def get_product_tasks(product_code: str):
+    """按产品编号查询关联任务（精确匹配项目名）"""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM tasks WHERE project_name = ? ORDER BY id DESC", (product_code,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def search_tasks(keyword: str, limit: int = 50):
+    """全文搜索任务（匹配描述/项目名/备注/责任人）"""
+    conn = get_connection()
+    kw = f"%{keyword}%"
+    rows = conn.execute("""
+        SELECT * FROM tasks
+        WHERE task_detail LIKE ? OR project_name LIKE ? OR notes LIKE ? OR responsible LIKE ?
+        ORDER BY id DESC LIMIT ?
+    """, (kw, kw, kw, kw, limit)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_completion_trend(days: int = 30):
+    """过去 N 天每日完成趋势"""
+    from datetime import datetime, timedelta
+    conn = get_connection()
+    start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    rows = conn.execute("""
+        SELECT date(updated_at) as day, COUNT(*) as count
+        FROM tasks
+        WHERE status = '已完成' AND date(updated_at) >= ?
+        GROUP BY day ORDER BY day
+    """, (start,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
